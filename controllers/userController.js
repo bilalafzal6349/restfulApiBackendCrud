@@ -1,28 +1,32 @@
-let users = [];
-let nextId = 1;
+import User from "../models/User.js";
+import mongoose from "mongoose";
 
-// Simple email format validator
-const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+// ─── Helper ────────────────────────────────────────────────────────────────
 
-// ─── GET ALL USERS ───────────────────────────────────────────────────────────
-const getAllUsers = (req, res) => {
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+// ─── Controllers ───────────────────────────────────────────────────────────
+
+// GET /users
+const getAllUsers = async (req, res) => {
   try {
+    const users = await User.find();
     res.json(users);
   } catch (err) {
     res.status(500).json({ message: "Internal server error" });
   }
 };
 
-// ─── GET USER BY ID ──────────────────────────────────────────────────────────
-const getUserById = (req, res) => {
+// GET /users/:id
+const getUserById = async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const { id } = req.params;
 
-    if (isNaN(id) || id <= 0) {
-      return res.status(400).json({ message: "Invalid ID. Must be a positive number" });
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid ID format" });
     }
 
-    const user = users.find((u) => u.id === id);
+    const user = await User.findById(id);
     if (!user) {
       return res.status(404).json({ message: `User with ID ${id} not found` });
     }
@@ -33,11 +37,12 @@ const getUserById = (req, res) => {
   }
 };
 
-// ─── CREATE USER ─────────────────────────────────────────────────────────────
-const createUser = (req, res) => {
+// POST /users
+const createUser = async (req, res) => {
   try {
     const { name, email } = req.body;
 
+    // Manual presence checks for clear error messages
     if (!name && !email) {
       return res.status(400).json({ message: "Name and email are required" });
     }
@@ -47,33 +52,32 @@ const createUser = (req, res) => {
     if (!email) {
       return res.status(400).json({ message: "Email is required" });
     }
-    if (typeof name !== "string" || name.trim() === "") {
-      return res.status(400).json({ message: "Name must be a non-empty string" });
-    }
-    if (!isValidEmail(email)) {
-      return res.status(400).json({ message: "Invalid email format" });
-    }
 
-    const existingUser = users.find((u) => u.email === email.toLowerCase());
-    if (existingUser) {
-      return res.status(409).json({ message: "An account with this email already exists" });
-    }
+    const newUser = new User({ name, email });
+    await newUser.save();
 
-    const newUser = { id: nextId++, name: name.trim(), email: email.toLowerCase() };
-    users.push(newUser);
     res.status(201).json({ message: "User has been created successfully", user: newUser });
   } catch (err) {
+    // Mongoose duplicate key error
+    if (err.code === 11000) {
+      return res.status(409).json({ message: "An account with this email already exists" });
+    }
+    // Mongoose validation error (e.g., invalid email format)
+    if (err.name === "ValidationError") {
+      const messages = Object.values(err.errors).map((e) => e.message);
+      return res.status(400).json({ message: messages[0] });
+    }
     res.status(500).json({ message: "Internal server error" });
   }
 };
 
-// ─── UPDATE USER ─────────────────────────────────────────────────────────────
-const updateUser = (req, res) => {
+// PUT /users/:id
+const updateUser = async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const { id } = req.params;
 
-    if (isNaN(id) || id <= 0) {
-      return res.status(400).json({ message: "Invalid ID. Must be a positive number" });
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid ID format" });
     }
 
     const { name, email } = req.body;
@@ -81,51 +85,50 @@ const updateUser = (req, res) => {
     if (!name && !email) {
       return res.status(400).json({ message: "At least one field (name or email) is required to update" });
     }
-    if (name !== undefined && (typeof name !== "string" || name.trim() === "")) {
-      return res.status(400).json({ message: "Name must be a non-empty string" });
-    }
-    if (email !== undefined && !isValidEmail(email)) {
-      return res.status(400).json({ message: "Invalid email format" });
-    }
 
-    const user = users.find((u) => u.id === id);
-    if (!user) {
+    // Build update object with only provided fields
+    const updates = {};
+    if (name) updates.name = name.trim();
+    if (email) updates.email = email.toLowerCase().trim();
+
+    const updatedUser = await User.findByIdAndUpdate(
+      id,
+      updates,
+      { new: true, runValidators: true } // return the updated doc and run schema validators
+    );
+
+    if (!updatedUser) {
       return res.status(404).json({ message: `User with ID ${id} not found` });
     }
 
-    if (email && email.toLowerCase() !== user.email) {
-      const emailTaken = users.find((u) => u.email === email.toLowerCase() && u.id !== id);
-      if (emailTaken) {
-        return res.status(409).json({ message: "Another account with this email already exists" });
-      }
-    }
-
-    if (name) user.name = name.trim();
-    if (email) user.email = email.toLowerCase();
-
-    res.json(user);
+    res.json({ message: "User updated successfully", user: updatedUser });
   } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ message: "Another account with this email already exists" });
+    }
+    if (err.name === "ValidationError") {
+      const messages = Object.values(err.errors).map((e) => e.message);
+      return res.status(400).json({ message: messages[0] });
+    }
     res.status(500).json({ message: "Internal server error" });
   }
 };
 
-// ─── DELETE USER ─────────────────────────────────────────────────────────────
-const deleteUser = (req, res) => {
+// DELETE /users/:id
+const deleteUser = async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const { id } = req.params;
 
-    if (isNaN(id) || id <= 0) {
-      return res.status(400).json({ message: "Invalid ID. Must be a positive number" });
+    if (!isValidObjectId(id)) {
+      return res.status(400).json({ message: "Invalid ID format" });
     }
 
-    const index = users.findIndex((u) => u.id === id);
-    if (index === -1) {
+    const deletedUser = await User.findByIdAndDelete(id);
+    if (!deletedUser) {
       return res.status(404).json({ message: `User with ID ${id} not found` });
     }
 
-    users.splice(index, 1);
     res.status(200).json({ message: "User has been deleted successfully" });
-    
   } catch (err) {
     res.status(500).json({ message: "Internal server error" });
   }

@@ -1,12 +1,15 @@
+import "dotenv/config";
 import express, { json } from "express";
-const app = express();
+import connectDB from "./config/db.js";
+import userRoutes from "./routes/users.js";
 
+const app = express();
 app.use(json());
 
-import userRoutes from "./routes/users.js";
-app.use("/users", userRoutes);
-
-const PORT = process.env.PORT || 3002;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+connectDB().then(() => {
+  app.listen(process.env.PORT || 3002, () => {
+    console.log(` Server is running on port ${process.env.PORT || 3002}`);
+  });
 });
+
+app.use("/users", userRoutes);
